@@ -1,0 +1,88 @@
+name: repage
+
+on:
+  schedule:
+    - cron: "*/20 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    concurrency:
+      group: pages-deploy
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Pages repo
+        uses: actions/checkout@v4
+        with:
+            fetch-depth: 0
+
+      - name: Get latest commit hash
+        id: source
+        run: |
+            echo "hash=$(git ls-remote https://github.com/transmia/website.git HEAD | cut -f1)" >> $GITHUB_OUTPUT
+
+      - name: Load cached hash
+        id: cache
+        run: |
+          if [ -f .last_hash ]; then
+            echo "prev=$(cat .last_hash)" >> $GITHUB_OUTPUT
+          else
+            echo "prev=none" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check if update needed
+        id: check
+        run: |
+            prev=$(cat .last_hash 2>/dev/null || echo "none")
+            if [ "$prev" = "${{ steps.source.outputs.hash }}" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            else
+            echo "skip=false" >> $GITHUB_OUTPUT
+            fi
+
+      - name: Save new hash
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          echo "${{ steps.source.outputs.hash }}" > .last_hash
+
+      - name: Clone source repo
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          git clone --depth 1 https://github.com/transmia/website.git source
+
+      - name: Build site
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          rm -rf dist
+          mkdir dist
+          cp -r source/* dist/
+
+      - name: Setup Pages
+        if: steps.check.outputs.skip == 'false'
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        if: steps.check.outputs.skip == 'false'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+      - name: Deploy
+        if: steps.check.outputs.skip == 'false'
+        uses: actions/deploy-pages@v4
+
+      - name: Commit hash cache
+        if: steps.check.outputs.skip == 'false'
+        run: |
+            git config user.name "github-actions"
+            git config user.email "actions@github.com"
+            git add .last_hash
+            git commit -m "update source hash" || exit 0
+            git push
